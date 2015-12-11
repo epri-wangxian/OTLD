@@ -1,0 +1,121 @@
+public static bool CalFangLei(string projectid, string param, ref string errorMsg)
+        {
+            User currentUser = null;
+            try
+            {
+                currentUser = BLLHelper.GetCurrentUser(param);
+                using (DbaSQLServer dba = new DbaSQLServer())
+                {
+                    //读取防雷计算表
+                    //CalFangLei FangLei = CalFangLeiFactory.ReadCalFangLeiByCode(dba, currentUser, projectid);
+                    //读取防雷设计表
+                    CalLightingProtection LightingProtection = CalFangLeiFactory.ReadCalLightingProtectionByCode(dba, currentUser, projectid);
+                    //读取电压等级
+                    CalProjectBase voltage_p = CalFangLeiFactory.ReadProjectBaseByCode(dba, currentUser, projectid);
+                    //转换电压等级
+                    double voltage = CalculateModuleE.VolStringToDouble(voltage_p.VOLTAGECLASS);
+
+                    //计算
+                    double U = voltage / 1000;                  //电压等级(kV)
+                    double Zc = LightingProtection.WaveImped;               //波阻抗（o）
+                    double hdd = LightingProtection.LightingWireAvgHeight - LightingProtection.ConductorAvgHeight;          //导地线间距离（m）  避雷线-导线
+                    double U50 = LightingProtection.InsulatorFlashOverVoltage;         //绝缘子50%闪络电压（kV）绝缘子串50%冲击放电电压（V）
+                    double h = LightingProtection.WireHangHeight;            //导线挂点高度（m）
+                    double o = LightingProtection.GroundProtectAngle;               //地线保护角(角度制)
+                    double l = LightingProtection.WireArmLength;          //横担长度（m）
+                    double T = LightingProtection.ThunderStormDays;             //雷暴次数（日）  年雷暴日（天）
+                    double b = LightingProtection.GroundArmLength;            //地线横担宽度（m）
+                    double hg = LightingProtection.GroundHangHeight;            //地线高度（m）
+                    double ht = LightingProtection.TowerHeight;                  //塔高（m）  杆塔高度（m）
+                    double dj = LightingProtection.AveSpan;          //平均档距（m）
+
+                    int i = 0;
+                    int Imin = 0;
+                    double Z0 = 0;
+                    double rs = 0;
+                    double rc = 0;
+                    double rg = 0;
+                    double jsa = 0;
+                    int Imax = 0;
+                    double P = 0;
+                    double o1 = 0;
+                    double o2 = 0;
+                    double X = 0;
+                    double F = 0;
+                    double rs1 = 0;
+                    double rc1 = 0;
+                    double rg1 = 0;
+                    double o11 = 0;
+                    double o21 = 0;
+                    double X1 = 0;
+                    double F1 = 0;
+
+                    Z0 = 600;
+                    Imin = (int)Math.Floor((U50 + 2 * Z0 * U / (2 * Z0 + Zc)) * (2 * Z0 + Zc) / Z0 / Zc);
+
+                    for (i = 20; i < 300; i++)
+                    {
+                        rs = 10 * Math.Pow(i, 0.65);
+                        rg = 8.93 * Math.Pow(i, 0.65);
+                        rc = 1.63 * Math.Pow((5.015 * Math.Pow(i, 0.578) - U), 1.125);
+
+                        jsa = 1.57 + o * 0.0175 - Math.Acos((rc * rc + hdd * hdd - rs * rs) / 2 / rc / hdd) - Math.Asin((rg - h) / rc);
+
+                        if (jsa > -0.5 && jsa < 0.5)
+                        {
+                            Imax = i;
+                            break;
+                        }
+                        else
+                        {
+                            continue;
+                        }
+                    }
+                    for (i = Imin; i < Imax; i++)
+                    {
+                        rs = 10 * Math.Pow(i, 0.65);
+                        rg = 8.93 * Math.Pow(i, 0.65);
+                        rc = 1.63 * Math.Pow((5.015 * Math.Pow(i, 0.578) - U), 1.125);
+                        o1 = Math.Asin((rg - h) / rc);
+                        o2 = 1.57 + o * 0.0175 - Math.Acos((rc * rc + hdd * hdd - rs * rs) / 2 / rc / hdd);
+
+                        X = rc * (Math.Cos(o1) - Math.Cos(o2)) / (rc * Math.Cos(o1) + l);
+                        F = 0.026 * Math.Pow(10.0, (-i / 88));
+
+                        rs1 = 10 * Math.Pow(i + 1, 0.65);
+                        rg1 = 8.93 * Math.Pow(i + 1, 0.65);
+                        rc1 = 1.63 * Math.Pow((5.015 * Math.Pow(i + 1, 0.578) - U), 1.125);
+                        o11 = Math.Asin((rg1 - h) / rc1);
+                        o21 = 1.57 + o * 0.0175 - Math.Acos((rc1 * rc1 + hdd * hdd - rs1 * rs1) / 2 / rc1 / hdd);
+
+                        X1 = rc1 * (Math.Cos(o11) - Math.Cos(o21)) / (rc1 * Math.Cos(o11) + l);
+                        F1 = 0.026 * Math.Pow(10.0, (-(i + 1) / 88));
+
+                        P = P + (X * F + X1 * F1) / 2;
+                    }
+                    P = Math.Abs(P) / 5;
+                    double N = 0.0023 * Math.Pow(T, 1.3) * (b + 4 * Math.Pow(hg, 1.09));
+
+                    double RaoJi = P * N;
+
+                    double FanJi = N * ht / dj * ht / 73.3 * 4.7 / 10000;
+
+                    double TiaoZha = RaoJi + FanJi;
+
+                    //save
+                    CalLightingProtection save = new CalLightingProtection();
+                    save.RTripOutRate = RaoJi;
+                    save.BTripOutRate = FanJi;
+                    save.TRipOutRate = TiaoZha;
+                    CalFangLeiFactory.UpdateCalFangLei(dba, currentUser, save, projectid);
+                }
+                return true;
+            }
+            catch (System.Exception ex)
+            {
+                errorMsg = ex.Message;
+                // errorMsg = "cal mechanicalCharac error";
+                BLLHelper.HandleException(currentUser, ref errorMsg, ex);
+                return false;
+            }
+        }
